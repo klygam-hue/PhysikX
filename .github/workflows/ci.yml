@@ -1,0 +1,68 @@
+name: Build and test
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  native:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build --config Release --parallel 2
+      - run: ctest --test-dir build -C Release --output-on-failure
+      - name: Python ABI tests
+        shell: python
+        run: |
+          import os, pathlib, subprocess, sys
+          root=pathlib.Path.cwd()
+          candidates=list((root/'build').rglob('PhysikX.dll' if sys.platform=='win32' else ('libPhysikX.dylib' if sys.platform=='darwin' else 'libPhysikX.so')))
+          assert candidates, 'Missing native library'
+          env=dict(os.environ,PHYSIKX_LIBRARY=str(candidates[0]),PYTHONPATH=str(root/'Bindings/Python'))
+          subprocess.run([sys.executable,'Tests/test_python.py','-v'],env=env,check=True)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PhysikX-${{ matrix.os }}
+          path: |
+            build/**/*.dll
+            build/**/*.so
+            build/**/*.dylib
+            Code/include/
+  bindings:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - run: rustup toolchain install stable --profile minimal
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPHYSIKX_BUILD_JAVA=ON
+      - run: cmake --build build --parallel 2
+      - name: Rust ownership tests
+        env:
+          PHYSIKX_LIB_DIR: ${{ github.workspace }}/build
+          LD_LIBRARY_PATH: ${{ github.workspace }}/build
+        run: cargo +stable test --manifest-path Bindings/Rust/Cargo.toml
+      - name: C# P/Invoke tests
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/build
+        run: dotnet run --project Examples/CSharp/Demo.csproj -c Release
+      - name: Java JNI tests
+        run: |
+          mkdir -p build/java
+          javac -d build/java Bindings/Java/src/main/java/physikx/World.java Examples/JavaSmoke.java
+          java -Djava.library.path=build -cp build/java JavaSmoke
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DPHYSIKX_SANITIZE=ON
+      - run: cmake --build build --parallel 2
+      - run: ctest --test-dir build --output-on-failure
