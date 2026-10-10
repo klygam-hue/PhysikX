@@ -105,18 +105,3 @@ Performance is workload dependent: sweep-and-prune reduces sparse pair searches,
 but dense overlap still has quadratic worst-case cost. No cross-machine bitwise
 determinism is promised. [Docs/validation.md](Docs/validation.md) records the
 actual checks performed for this alpha; a workflow file alone is not a passing CI run.
-
-## License
-
-**PhysikX Proprietary Evaluation License 1.0.** Copyright (c) 2026 Mistrul.
-All rights reserved except for the limited permissions in [LICENSE](LICENSE).
-
-Recipients may inspect the source and privately compile/run it for evaluation.
-Using it in other projects, public/production deployment, redistribution,
-relicensing or sale requires Mistrul's prior written permission. This is a
-proprietary library with source available for evaluation, not an open-source
-project. The Licensor's own use is not restricted by these recipient terms.
-
-Public hosting platform rights and mandatory legal exceptions remain applicable.
-Earlier MIT copies retain their existing permissions; this change applies to
-new distributions. See [Docs/licensing.md](Docs/licensing.md).
