@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+[project]
+name = "physikx"
+version = "0.1.0a2"
+description = "PhysikX 2D/3D native physics bindings (native library required)"
+requires-python = ">=3.9"
+license = {file = "LICENSE"}
+authors = [{name = "Mistrul"}]
+[tool.setuptools]
+packages = ["PhysikX"]
