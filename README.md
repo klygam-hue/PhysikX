@@ -2,7 +2,7 @@
 
 **A renderer-independent 2D/3D physics library by Mistrul.**
 
-Version: **0.1.0-alpha.2**. This is a working foundation with regression tests,
+Version: **0.1.0-beta**. This is a working foundation with regression tests,
 not a production-complete replacement for mature rigid-body engines.
 
 One C++17 core exposes a C ABI. C++, C, C#, Rust, Python and Java use the same
