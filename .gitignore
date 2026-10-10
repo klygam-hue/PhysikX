@@ -1,0 +1,15 @@
+build*/
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+Bindings/Rust/target/
+**/bin/
+**/obj/
+*.class
+*.so
+*.dylib
+*.dll
+*.exe
+*.pdb
+*.zip
