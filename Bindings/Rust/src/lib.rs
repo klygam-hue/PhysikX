@@ -64,6 +64,48 @@ pub struct Stats {
     pub dropped_time: f64,
 }
 #[repr(C)]
+#[derive(Clone, Copy, Default, Debug)]
+pub struct MassProperties {
+    pub volume: f64,
+    pub density: f64,
+    pub mass: f64,
+    pub weight: f64,
+    pub weight_force: Vec3,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug)]
+pub struct Material {
+    pub friction: f64,
+    pub restitution: f64,
+    pub breaking_force: f64,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug)]
+pub struct DistanceProperties {
+    pub a: u64,
+    pub b: u64,
+    pub rest_length: f64,
+    pub compliance: f64,
+    pub breaking_force: f64,
+    pub force: f64,
+}
+pub const DISTANCE_BROKEN: u32 = 0;
+pub const BODY_FRACTURED: u32 = 1;
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug)]
+pub struct BreakEvent {
+    pub kind: u32,
+    pub count: u32,
+    pub source: u64,
+    pub fragments: [u64; 8],
+    pub force: f64,
+}
+impl BreakEvent {
+    pub fn fragment_ids(&self) -> &[u64] {
+        &self.fragments[..(self.count as usize).min(8)]
+    }
+}
+#[repr(C)]
 struct NativeWorld {
     _private: [u8; 0],
 }
@@ -85,6 +127,18 @@ extern "C" {
     fn px_body_apply_impulse(world: *mut NativeWorld, id: u64, value: Vec3) -> i32;
     fn px_distance_create(world: *mut NativeWorld, desc: *const DistanceDesc, id: *mut u64) -> i32;
     fn px_distance_destroy(world: *mut NativeWorld, id: u64) -> i32;
+    fn px_body_get_mass_properties(world: *const NativeWorld, id: u64, out: *mut MassProperties) -> i32;
+    fn px_body_set_mass(world: *mut NativeWorld, id: u64, value: f64) -> i32;
+    fn px_body_set_density(world: *mut NativeWorld, id: u64, value: f64) -> i32;
+    fn px_body_apply_thrust(world: *mut NativeWorld, id: u64, direction: Vec3, force: f64) -> i32;
+    fn px_body_get_material(world: *const NativeWorld, id: u64, out: *mut Material) -> i32;
+    fn px_body_set_friction(world: *mut NativeWorld, id: u64, value: f64) -> i32;
+    fn px_body_set_strength(world: *mut NativeWorld, id: u64, value: f64) -> i32;
+    fn px_distance_get_properties(world: *const NativeWorld, id: u64, out: *mut DistanceProperties) -> i32;
+    fn px_distance_set_elasticity(world: *mut NativeWorld, id: u64, value: f64) -> i32;
+    fn px_distance_set_strength(world: *mut NativeWorld, id: u64, value: f64) -> i32;
+    fn px_body_fracture(world: *mut NativeWorld, id: u64, out: *mut BreakEvent) -> i32;
+    fn px_world_break_events(world: *const NativeWorld, out: *mut BreakEvent, capacity: usize) -> usize;
 }
 fn error() -> String {
     unsafe {
@@ -166,6 +220,53 @@ impl World {
         check(unsafe { px_world_get_stats(self.handle.as_ptr(), &mut out) })?;
         Ok(out)
     }
+    pub fn mass_properties(&self, id: u64) -> Result<MassProperties, String> {
+        let mut out = MassProperties::default();
+        check(unsafe { px_body_get_mass_properties(self.handle.as_ptr(), id, &mut out) })?;
+        Ok(out)
+    }
+    pub fn set_mass(&mut self, id: u64, value: f64) -> Result<(), String> {
+        check(unsafe { px_body_set_mass(self.handle.as_ptr(), id, value) })
+    }
+    pub fn set_density(&mut self, id: u64, value: f64) -> Result<(), String> {
+        check(unsafe { px_body_set_density(self.handle.as_ptr(), id, value) })
+    }
+    pub fn apply_thrust(&mut self, id: u64, direction: Vec3, force: f64) -> Result<(), String> {
+        check(unsafe { px_body_apply_thrust(self.handle.as_ptr(), id, direction, force) })
+    }
+    pub fn material(&self, id: u64) -> Result<Material, String> {
+        let mut out = Material::default();
+        check(unsafe { px_body_get_material(self.handle.as_ptr(), id, &mut out) })?;
+        Ok(out)
+    }
+    pub fn set_friction(&mut self, id: u64, value: f64) -> Result<(), String> {
+        check(unsafe { px_body_set_friction(self.handle.as_ptr(), id, value) })
+    }
+    pub fn set_strength(&mut self, id: u64, value: f64) -> Result<(), String> {
+        check(unsafe { px_body_set_strength(self.handle.as_ptr(), id, value) })
+    }
+    pub fn distance_properties(&self, id: u64) -> Result<DistanceProperties, String> {
+        let mut out = DistanceProperties::default();
+        check(unsafe { px_distance_get_properties(self.handle.as_ptr(), id, &mut out) })?;
+        Ok(out)
+    }
+    pub fn set_elasticity(&mut self, id: u64, value: f64) -> Result<(), String> {
+        check(unsafe { px_distance_set_elasticity(self.handle.as_ptr(), id, value) })
+    }
+    pub fn set_distance_strength(&mut self, id: u64, value: f64) -> Result<(), String> {
+        check(unsafe { px_distance_set_strength(self.handle.as_ptr(), id, value) })
+    }
+    pub fn fracture(&mut self, id: u64) -> Result<BreakEvent, String> {
+        let mut out = BreakEvent::default();
+        check(unsafe { px_body_fracture(self.handle.as_ptr(), id, &mut out) })?;
+        Ok(out)
+    }
+    pub fn break_events(&self) -> Vec<BreakEvent> {
+        let count = unsafe { px_world_break_events(self.handle.as_ptr(), std::ptr::null_mut(), 0) };
+        let mut out = vec![BreakEvent::default(); count];
+        unsafe { px_world_break_events(self.handle.as_ptr(), out.as_mut_ptr(), count); }
+        out
+    }
 }
 impl Drop for World {
     fn drop(&mut self) {
@@ -198,5 +299,44 @@ mod tests {
     #[test]
     fn invalid_dimension() {
         assert!(World::new(WorldDesc::defaults(4)).is_err());
+    }
+    #[test]
+    fn properties_and_fracture_ffi() -> Result<(), String> {
+        assert_eq!(std::mem::size_of::<BreakEvent>(),88);
+        assert_eq!(std::mem::size_of::<MassProperties>(),56);
+        let mut settings=WorldDesc::defaults(3);
+        settings.gravity=Vec3::default(); settings.linear_damping=0.0; settings.fixed_dt=0.1;
+        let mut w=World::new(settings)?;
+        let id=w.create_body(BodyDesc{shape:1,mass:2.0,layer:0,..BodyDesc::default()})?;
+        assert_eq!(w.mass_properties(id)?.volume,1.0);
+        w.set_density(id,3.0)?; assert_eq!(w.mass_properties(id)?.mass,3.0);
+        w.set_mass(id,2.0)?; w.set_friction(id,0.8)?;
+        assert_eq!(w.material(id)?.friction,0.8);
+        w.apply_thrust(id,Vec3{x:10.0,y:0.0,z:0.0},10.0)?; w.step(0.1)?;
+        assert!((w.state(id)?.velocity.x-0.5).abs()<1e-10);
+        let event=w.fracture(id)?;
+        assert_eq!(event.kind,BODY_FRACTURED); assert_eq!(event.fragment_ids().len(),8);
+        let mass: f64=event.fragment_ids().iter().map(|&c| w.mass_properties(c).unwrap().mass).sum();
+        assert!((mass-2.0).abs()<1e-10);
+        assert_eq!(w.break_events()[0].source,id); assert!(w.state(id).is_err());
+        let b=w.create_body(BodyDesc{layer:0,position:Vec3{x:10.0,y:0.0,z:0.0},..BodyDesc::default()})?;
+        w.set_strength(b,1.0)?; w.apply_thrust(b,Vec3{x:1.0,y:0.0,z:0.0},2.0)?; w.step(0.1)?;
+        assert_eq!(w.break_events()[0].source,b);
+        Ok(())
+    }
+    #[test]
+    fn elastic_link_strength_ffi() -> Result<(), String> {
+        let mut settings=WorldDesc::defaults(3);
+        settings.gravity=Vec3::default(); settings.linear_damping=0.0; settings.fixed_dt=0.1;
+        let mut w=World::new(settings)?;
+        let a=w.create_body(BodyDesc{is_static:1,layer:0,..BodyDesc::default()})?;
+        let b=w.create_body(BodyDesc{layer:0,position:Vec3{x:1.0,y:0.0,z:0.0},..BodyDesc::default()})?;
+        let link=w.distance(DistanceDesc{a,b,rest_length:1.0,compliance:0.0})?;
+        w.set_elasticity(link,10.0)?; w.set_distance_strength(link,0.1)?;
+        assert_eq!(w.distance_properties(link)?.compliance,0.1);
+        w.apply_force(b,Vec3{x:10.0,y:0.0,z:0.0})?; w.step(0.1)?;
+        assert_eq!(w.break_events()[0].kind,DISTANCE_BROKEN);
+        assert_eq!(w.break_events()[0].source,link); assert!(w.distance_properties(link).is_err());
+        Ok(())
     }
 }
