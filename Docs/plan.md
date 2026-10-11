@@ -57,7 +57,7 @@ continuum stress, plastic deformation or arbitrary-mesh cutting model.
 
 ## Production acceptance
 
-- [ ] Run CI on real Windows, Linux and macOS runners.
+- [x] Run CI on Windows, Linux and macOS runners, bindings and sanitizers ([0.2.0-beta.1 run](https://github.com/klygam-hue/PhysikX/actions/runs/38158873673)).
 - [ ] Fuzz ABI descriptors and lifetime sequences; allocation-failure injection.
 - [ ] Performance suite with sparse/dense/stacks/jelly scenes and hardware records.
 - [ ] Package signed/reproducible native releases and each ecosystem's packages.
