@@ -2,9 +2,9 @@
 
 | Path | Responsibility |
 | --- | --- |
-| `Code/include/PhysikX/physikx.h` | exported C ABI and descriptor layouts |
+| `Code/include/PhysikX/physikx.h` | exported C ABI, unchanged v1 descriptors and material/fracture output layouts |
 | `Code/include/PhysikX/physikx.hpp` | C++ RAII convenience wrapper |
-| `Code/src/physikx.cpp` | world storage, integration, collision and constraints |
+| `Code/src/physikx.cpp` | world storage, integration, collision, elastic/breakable links and primitive fracture |
 | `Bindings/Python/` | ctypes package imported as PhysikX |
 | `Bindings/CSharp/` | .NET 8 P/Invoke wrapper |
 | `Bindings/Rust/` | safe ownership wrapper, native link settings and tests |
@@ -19,7 +19,7 @@
 | `.github/workflows/` | platform builds and binding CI |
 | `CMakeLists.txt` | portable build, testing and installation |
 | `AGENTS.md` | contributor rules and ABI/validation requirements |
-| `README.md` | overview plus the final command guide: six language references, settings, complete examples, loader setup, query results and common mistakes |
+| `README.md` | overview plus the final command guide: six language references, settings, complete examples, loader setup, query results, common mistakes and the final materials/fracture extension guide |
 | `CHANGELOG.md`, `LICENSE` | version history and proprietary evaluation terms |
 
 Generated build directories, binaries, caches and development-tool downloads
