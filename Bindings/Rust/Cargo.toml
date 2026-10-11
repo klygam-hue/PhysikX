@@ -1,6 +1,6 @@
 [package]
 name = "physikx"
-version = "0.1.0-alpha.2"
+version = "0.2.0-beta.1"
 edition = "2021"
 license-file = "LICENSE"
 description = "Safe owning wrapper around the PhysikX native C ABI"
