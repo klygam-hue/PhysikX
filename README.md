@@ -106,7 +106,7 @@ Run tests before changes to the solver. CI describes checks for all six language
 Performance is workload dependent: sweep-and-prune reduces sparse pair searches,
 but dense overlap still has quadratic worst-case cost. No cross-machine bitwise
 determinism is promised. [Docs/validation.md](Docs/validation.md) records the
-actual checks performed for this alpha; a workflow file alone is not a passing CI run.
+actual checks performed by version; a workflow file alone is not a passing CI run.
 
 ## Command guide: all supported languages
 
@@ -118,8 +118,8 @@ before running any example; installing a language wrapper alone is not enough.
 Read in this order:
 
 1. [Shared concepts and settings](#shared-concepts-and-settings).
-2. Your language: [C](#c-command-reference), [C++](#cpp-command-reference),
-   [C#](#csharp-command-reference), [Rust](#rust-command-reference),
+2. Your language: [C](#c-command-reference), [C++](#c-command-reference-1),
+   [C#](#c-command-reference-2), [Rust](#rust-command-reference),
    [Python](#python-command-reference), or [Java](#java-command-reference).
 3. [Queries and returned data](#queries-and-returned-data).
 4. [Common mistakes](#common-mistakes).
@@ -314,7 +314,7 @@ body/constraint for operations other than raycasting.
 Count-returning query functions do not return a status: invalid arguments return
 zero and set the diagnostic, so count alone cannot distinguish invalid from empty.
 
-**Complete example covering every exported C command.** Save as `commands.c`.
+**Complete example covering the original C commands.** New material commands are demonstrated in the final section. Save as `commands.c`.
 The helper `require_ok` exits on failure and releases the world.
 
 ```c
