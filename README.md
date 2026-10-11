@@ -2,7 +2,7 @@
 
 **A renderer-independent 2D/3D physics library by Mistrul.**
 
-Version: **0.1.0-beta**. This is a working foundation with regression tests,
+Version: **0.2.0-beta.1**. This is a working foundation with regression tests,
 not a production-complete replacement for mature rigid-body engines.
 
 One C++17 core exposes a C ABI. C++, C, C#, Rust, Python and Java use the same
@@ -12,6 +12,8 @@ simulation. All code, API names, examples and documentation are in English.
 
 - 2D circles / axis-aligned rectangles and 3D spheres / axis-aligned boxes.
 - Dynamic and static bodies; gravity, forces, impulses, velocity and position setters.
+- Runtime mass/density/weight queries, thrust, friction and strength controls.
+- Elastic breakable distance links, primitive fragmentation and break-event snapshots.
 - Fixed timestep accumulator with an explicit overload budget and dropped-time statistics.
 - Impulse collision response, restitution, Coulomb-style friction and position correction.
 - XPBD distance constraints with configurable compliance; build ropes and particle networks.
@@ -122,6 +124,9 @@ Read in this order:
 3. [Queries and returned data](#queries-and-returned-data).
 4. [Common mistakes](#common-mistakes).
 
+The new mass/material/fracture commands are documented in the
+[final materials section](#mass-thrust-friction-elasticity-and-fracture).
+
 The names below match the current source. Languages have different wrapper
 coverage; an unavailable method is explicitly marked rather than given a made-up name.
 
@@ -196,7 +201,8 @@ It currently has no public controls for the other world descriptor fields.
 
 All body descriptor fields are set at creation. Afterwards, the current API can
 change position and velocity, apply force/impulse, or delete the body. There are
-no runtime mass, shape, size, material, layer or mask setters yet.
+no runtime shape, size, restitution, layer or mask setters yet. Runtime mass, density,
+friction and strength controls are documented in the final materials section.
 
 | Setting in C/C++/Python/Rust | C# field | Default | Meaning and accepted values |
 | --- | --- | --- | --- |
@@ -224,7 +230,7 @@ For example, assigning `mask=0` disables collisions for that body. Distance-link
 bodies still collide unless you configure their masks to exclude each other.
 
 Java's body constructors expose shape, position, size, mass and the static flag.
-Velocity can be changed after creation. Material settings, collision bitfields
+Velocity can be changed after creation. Friction is adjustable at runtime in Java. Restitution setters, collision bitfields
 and user data are not currently exposed in Java.
 
 #### What the main operations do
@@ -265,6 +271,7 @@ they are not yet a fully coupled solver.
 | --- | --- | --- | --- | --- | --- | --- |
 | World/body settings at creation | Full | Full | Full | Full | Full | Selected fields |
 | Step, gravity, bodies, forces, impulses, distance constraints | Yes | Yes | Yes | Yes | Yes | Yes |
+| Mass/density/weight, thrust, runtime friction, elasticity, strength and fracture events | Yes | Yes | Yes | Yes | Yes | Yes |
 | Statistics | Yes | Yes | Yes | Yes | Yes | Not exposed |
 | Contacts, AABB query, raycast | Yes | Through C API and `native_handle()` | Not exposed | Not exposed | Yes | Not exposed |
 | Native version/error strings | Yes | Through C API | Errors become exceptions | Errors become `Err(String)` | Errors become exceptions; package has `__version__` | Errors become exceptions |
@@ -566,7 +573,7 @@ but the public `Distance` method accepts these as separate arguments.
 Contacts, AABB queries, raycasting and native version access are not exposed by
 this C# wrapper. Its internal `Native` class is not a public API.
 
-**Complete example covering all public World operations.** Use it as `Program.cs`
+**Complete example covering the original World operations.** New material commands are demonstrated in the final section. Use it as `Program.cs`
 in a .NET 8 console project that references the binding project.
 
 ```csharp
@@ -661,7 +668,7 @@ native handle, contacts, AABB queries, raycasting or version function.
 `BodyState::default()` and `Stats::default()` create zero-valued output containers;
 they do not read a world. Formatting output with `Debug` does not change physics.
 
-**Complete example covering all public World operations.** Place in your
+**Complete example covering the original World operations.** New material commands are demonstrated in the final section. Place in your
 application's `src/main.rs` with the binding dependency configured.
 
 ```rust
@@ -763,7 +770,7 @@ simulations. Pass keyword settings to `World`/`create_body`, not a descriptor
 object as an undocumented positional argument. `_load`, `_check`, `_vec`,
 `_ptr` and other names starting with `_` are implementation details.
 
-**Complete example covering all World commands.** Save as `commands.py`.
+**Complete example covering the original World commands.** New material commands are demonstrated in the final section. Save as `commands.py`.
 
 ```python
 import PhysikX
@@ -848,11 +855,11 @@ library causes `UnsatisfiedLinkError` during class loading.
 | `world.destroyDistance(link)` | `void` | Delete a link. |
 | `world.close()` / end of try-with-resources | `void` | Release the world. Repeated close is safe; use try-with-resources for cleanup on exceptions. |
 
-Java does not yet expose descriptors, restitution/friction/masks, statistics,
+Java does not yet expose descriptors, restitution setters, collision masks, statistics,
 contacts, AABB queries, raycasts or native version access. Private native methods
 such as `stepNative` and `vector` are bridge internals, not commands to call.
 
-**Complete example covering every public command.** Save as `Commands.java`.
+**Complete example covering the original commands.** New material commands are demonstrated in the final section. Save as `Commands.java`.
 
 ```java
 import physikx.World;
@@ -986,4 +993,410 @@ For full bounds, lifetime guarantees and solver limitations, see
 [Docs/api.md](Docs/api.md). The command examples demonstrate API use, not a
 renderer, a realistic jelly simulation or a promise of identical motion across
 hardware.
+
+## Mass, thrust, friction, elasticity and fracture
+
+Available since **0.2.0-beta.1** in all six supported languages. Rebuild the
+native library and use matching wrappers: the new wrappers require the new
+exports. Existing ABI v1 descriptor layouts and existing function signatures
+are unchanged. Old applications can continue to use their original commands.
+
+### Physical meaning and units
+
+| Quantity | Meaning | Units / formula |
+| --- | --- | --- |
+| Volume | Geometry of the body, obtained from its shape and dimensions. Changing mass does not change volume. | Sphere: `4*pi*r^3/3`; box: `8*hx*hy*hz`, in m³. |
+| 2D effective volume | Circle/rectangle area multiplied by an assumed **1 meter thickness**. The stored Z half extent is ignored in this calculation. | Circle: `pi*r^2*1m`; rectangle: `4*hx*hy*1m`, in m³. |
+| Density | How much mass occupies one cubic meter. | kg/m³; `density = mass / volume`. Setting density changes mass to `density * volume`. |
+| Mass | Inertial mass: resistance to acceleration. | kg; changing mass keeps current velocity and the static/dynamic flag. It intentionally changes momentum if the body is moving. |
+| Weight | Magnitude of gravitational force under this world's current gravity. This is not mass. | N; `weight_force = mass * gravity`; `weight = length(weight_force)`. |
+| Thrust | Force of a motor/engine in a supplied direction. | N; direction is normalized, then multiplied by thrust magnitude. Reapply before each frame step for continuous thrust. |
+| Friction | Resistance to tangential motion during contact. | Dimensionless coefficient, `0..10`. Pair coefficient uses the geometric mean. |
+| Elastic stiffness | Spring stiffness of a distance link. Larger values resist stretching more. | N/m; `compliance = 1 / stiffness`. |
+| Strength | Load limit for breaking a link or fragmenting a dynamic primitive. | N; **not** a material stress in Pa, toughness in J/m² or Young's modulus. `0` disables automatic breaking. |
+
+For example, a 1 m³ box at density 2 kg/m³ has mass 2 kg. With gravity
+`(0,-9.81,0)`, its weight is 19.62 N. Thrust of 10 N gives 5 m/s² acceleration
+along its direction, before damping, gravity and constraints are applied.
+
+Weight is calculated even for static bodies: it reports their theoretical
+gravitational force, not a scale/support reaction. In a zero-gravity world weight
+is zero, while mass remains unchanged. `weight_force` changes direction when
+gravity changes; volume/density/mass do not depend on gravity.
+
+Accepted inputs: mass `1e-9..1e12` kg; density finite and positive, with the
+resulting mass inside that range; thrust `0..1e9` N with a nonzero bounded
+direction (nonzero XY in 2D); friction `0..10`; stiffness `1e-9..1e12` N/m;
+breaking force `0..1e12` N. NaN/infinity are rejected. Extremely tiny geometry
+that cannot produce finite density is rejected by the property query.
+Validate and apply changes through the methods; editing a returned property
+object changes only that copy.
+
+### How deformation and breaking work
+
+Create a distance link with the existing command, then set its elasticity and
+strength. Multiple linked bodies form a deformable network. Bodies themselves
+keep their sphere/box shape; elastic links change distances between centers.
+For a rigid link, create it with compliance `0`. A compliant link can be recreated
+with `0` if you need to restore rigidity.
+
+The link solver estimates reaction force as `abs(lambda) / fixed_dt²`. If that
+force strictly exceeds its nonzero strength, the link is removed and a
+`DISTANCE_BROKEN` event is produced. This is a timestep-based XPBD load estimate.
+Use the event to identify a removed link: querying it afterwards produces a
+not-found error. Body deletion/fracture also removes attached links; that implicit
+cleanup does not produce separate link-break events.
+
+A body's automatic fracture load is the maximum of applied net-force magnitude,
+an applied impulse divided by `fixed_dt`, link reaction force, and normal contact
+impulse divided by `fixed_dt`. Gravity and tangential friction impulses are not
+included in this load model. Set body strength **before** applying inputs.
+Automatic fracture is evaluated after a fixed step, not immediately inside a
+force setter. This is a useful game-oriented failure model, not a calibrated
+continuum stress/fracture simulation.
+
+`fracture(body)` can also split a body immediately without exceeding a threshold.
+Both manual and automatic fracture replace one dynamic body with 4 fragments in
+2D or 8 in 3D. The parent ID becomes invalid; use the returned/event fragment IDs.
+Total mass, effective volume, center of mass and translational momentum are
+preserved at the split. Accumulated force is distributed proportionally; velocity,
+friction, restitution, layers/masks and user data are inherited. Fragment strength
+is reset to `0` to prevent an uncontrolled recursive cascade. Assign new strength
+to selected children if you deliberately want later fragmentation.
+
+Boxes split into exact smaller boxes. Spheres/circles become equal smaller
+spheres/circles: their total volume/area is conserved, but they are an approximate
+fragment representation and their combined outer bounds expand. There is no mesh
+cutting, angular debris motion, crack propagation, plastic deformation or
+volume-preserving jelly solver. No extra explosion impulse is added.
+
+Static bodies cannot fracture. Each child must still have mass >= `1e-9` kg and
+valid bounded coordinates. An impossible manual split fails without removing
+the parent; automatic splitting skips bodies that cannot meet those limits.
+
+Break events are copies. A `step` call that executes a fixed step clears the old
+event list, then accumulates events from **all** substeps in that call. A call
+that executes no substep retains the list. Manual fractures append to it until
+the next executed step. Poll immediately after stepping or manual fracture.
+
+| Event field | Meaning |
+| --- | --- |
+| `kind` | `0`: distance link broken; `1`: body fractured. Language constants/enums are listed below. |
+| `source` | ID of the removed link/body. |
+| `count` / fragment list length | `0` for a broken link; `4` or `8` for a fractured body. |
+| `fragments` | New child body IDs; use only the first `count` entries in the C array. |
+| `force` | Estimated breaking load in N; manual fracture reports the body's most recently recorded load (zero for a new body). |
+
+### New commands in C
+
+All functions below except the event-list query return `px_status`. Check for
+`PX_OK`, then read output. They use the same error/status conventions as the
+[C command reference](#c-command-reference).
+
+| Command | Output / arguments | Purpose |
+| --- | --- | --- |
+| `px_body_get_mass_properties(w, body, &out)` | `px_mass_properties`: `volume`, `density`, `mass`, `weight`, `weight_force` | Read volume/mass/weight together. |
+| `px_body_set_mass(w, body, mass)` | kg | Set inertial mass without changing shape/velocity. |
+| `px_body_set_density(w, body, density)` | kg/m³ | Derive and set mass from geometry. |
+| `px_body_apply_thrust(w, body, direction, force)` | `px_vec3`, N | Add normalized-direction thrust. |
+| `px_body_get_material(w, body, &out)` | `px_material`: `friction`, `restitution`, `breaking_force` | Read contact settings and body strength. |
+| `px_body_set_friction(w, body, friction)` | coefficient | Change friction at runtime. |
+| `px_body_set_strength(w, body, force)` | N; `0` disables | Set automatic body-fracture threshold. Positive strength on a static body is rejected. |
+| `px_distance_get_properties(w, link, &out)` | `px_distance_properties`: `a`, `b`, `rest_length`, `compliance`, `breaking_force`, `force` | Read link settings and its latest estimated reaction force. |
+| `px_distance_set_elasticity(w, link, stiffness)` | N/m | Change a link's spring stiffness. |
+| `px_distance_set_strength(w, link, force)` | N; `0` disables | Set automatic link-break threshold. |
+| `px_body_fracture(w, body, &out)` | `px_break_event` | Immediately split a dynamic body; return IDs and append the event. |
+| `px_world_break_events(w, out, capacity)` | Returns `size_t` total count | Use `NULL,0` to count; allocate and copy as with contacts. Total count is returned even if capacity is too small. |
+
+Constants: `PX_DISTANCE_BROKEN`, `PX_BODY_FRACTURED`. Every new struct has a
+natural-layout ABI declaration in `physikx.h`; do not change packing.
+
+```c
+// Save as materials.c; build like commands.c in the earlier C section.
+#include <PhysikX/physikx.h>
+#include <stdio.h>
+#include <stdlib.h>
+static void ok(px_status s, px_world *w) {
+    if (s != PX_OK) { fprintf(stderr,"%s\n",px_last_error()); px_world_destroy(w); exit(1); }
+}
+int main(void) {
+    px_world_desc settings=px_world_defaults(3);
+    px_world *w=px_world_create(&settings);
+    if (!w) return 1;
+    px_body_desc d=px_body_defaults(); d.shape=PX_BOX; d.layer=0;
+    px_id body, anchor, link;
+    ok(px_body_create(w,&d,&body),w);
+    ok(px_body_set_density(w,body,250),w);
+    ok(px_body_set_mass(w,body,2),w);
+    px_mass_properties p; ok(px_body_get_mass_properties(w,body,&p),w);
+    printf("Volume: %g m3; mass: %g kg; weight: %g N\n",p.volume,p.mass,p.weight);
+    ok(px_body_set_friction(w,body,0.8),w);
+    ok(px_body_set_strength(w,body,50),w);
+    px_material material; ok(px_body_get_material(w,body,&material),w);
+    d=px_body_defaults(); d.is_static=1; d.layer=0; d.position.x=-2;
+    ok(px_body_create(w,&d,&anchor),w);
+    px_distance_desc rope={anchor,body,2,0}; ok(px_distance_create(w,&rope,&link),w);
+    ok(px_distance_set_elasticity(w,link,1000),w);
+    ok(px_distance_set_strength(w,link,10),w);
+    px_distance_properties spring; ok(px_distance_get_properties(w,link,&spring),w);
+    ok(px_body_apply_thrust(w,body,(px_vec3){10,0,0},10),w);
+    ok(px_world_step(w,1.0/120),w);
+    px_break_event event; ok(px_body_fracture(w,body,&event),w);
+    for (uint32_t i=0;i<event.count;++i)
+        printf("Fragment ID: %llu\n",(unsigned long long)event.fragments[i]);
+    size_t count=px_world_break_events(w,NULL,0);
+    printf("Break events: %zu\n",count);
+    px_world_destroy(w); // Includes every fragment and the anchor.
+    return 0;
+}
+```
+
+### New commands in C++
+
+Methods throw `std::runtime_error` on failure. Property structs keep the C field
+names. `break_events()` returns an owning vector; `fracture()` returns an event.
+
+| Command | Result | Purpose |
+| --- | --- | --- |
+| `world.mass_properties(body)` | `px_mass_properties` | Read volume, density, mass, weight and weight-force vector. |
+| `world.set_mass(body, mass)` | `void` | Change kg. |
+| `world.set_density(body, density)` | `void` | Set kg/m³ and derive mass. |
+| `world.apply_thrust(body, direction, force)` | `void` | Add normalized-direction thrust in N. |
+| `world.material(body)` | `px_material` | Read friction, restitution, breaking force. |
+| `world.set_friction(body, friction)` | `void` | Change contact friction. |
+| `world.set_strength(body, force)` | `void` | Set body load limit in N. |
+| `world.distance_properties(link)` | `px_distance_properties` | Read compliance, length, load limit and measured force. |
+| `world.set_elasticity(link, stiffness)` | `void` | Set link stiffness in N/m. |
+| `world.set_distance_strength(link, force)` | `void` | Set link load limit in N. |
+| `world.fracture(body)` | `px_break_event` | Split a body immediately. |
+| `world.break_events()` | `std::vector<px_break_event>` | Read all current break events. |
+
+```cpp
+// Save as materials.cpp; build like commands.cpp.
+#include <PhysikX/physikx.hpp>
+#include <iostream>
+int main() {
+    try {
+        PhysikX::World world;
+        auto d=px_body_defaults(); d.shape=PX_BOX; d.layer=0;
+        auto body=world.create_body(d);
+        world.set_density(body,250); world.set_mass(body,2);
+        auto p=world.mass_properties(body);
+        std::cout << p.volume << " m3, " << p.mass << " kg, " << p.weight << " N\n";
+        world.set_friction(body,0.8); world.set_strength(body,50);
+        std::cout << "Friction: " << world.material(body).friction << '\n';
+        d=px_body_defaults(); d.is_static=1; d.layer=0; d.position={-2,0,0};
+        auto anchor=world.create_body(d);
+        auto link=world.distance({anchor,body,2,0});
+        world.set_elasticity(link,1000); world.set_distance_strength(link,10);
+        std::cout << "Compliance: " << world.distance_properties(link).compliance << '\n';
+        world.apply_thrust(body,{10,0,0},10); world.step(1.0/120);
+        auto event=world.fracture(body);
+        for (uint32_t i=0;i<event.count;++i) std::cout << event.fragments[i] << '\n';
+        std::cout << "Events: " << world.break_events().size() << '\n';
+    } catch (const std::exception &e) { std::cerr << e.what() << '\n'; return 1; }
+}
+```
+
+### New commands in C#
+
+Use `PhysikX.MassProperties`, `Material`, `DistanceProperties`, `BreakEvent`.
+Struct fields use PascalCase (`Volume`, `WeightForce`, `BreakingForce`, etc.).
+`BreakEvent.Fragments` returns only the valid child IDs. Event kinds are
+`BreakKind.DistanceBroken` and `BreakKind.BodyFractured`. Existing exception and
+`using` ownership rules apply.
+
+| Command | Result | Purpose |
+| --- | --- | --- |
+| `world.MassProperties(body)` | `MassProperties` | Read physical quantities. |
+| `world.SetMass(body, mass)` | `void` | Change kg. |
+| `world.SetDensity(body, density)` | `void` | Derive mass from kg/m³. |
+| `world.ApplyThrust(body, new Vec3(x,y,z), force)` | `void` | Add thrust in N. |
+| `world.Material(body)` | `Material` | Read friction/restitution/strength. |
+| `world.SetFriction(body, friction)` | `void` | Change friction. |
+| `world.SetStrength(body, force)` | `void` | Set body-fracture threshold. |
+| `world.DistanceProperties(link)` | `DistanceProperties` | Read link settings and estimated force. |
+| `world.SetElasticity(link, stiffness)` | `void` | Set N/m. |
+| `world.SetDistanceStrength(link, force)` | `void` | Set link-break threshold. |
+| `world.Fracture(body)` | `BreakEvent` | Split a dynamic body. |
+| `world.BreakEvents()` | `BreakEvent[]` | Read current events. |
+
+```csharp
+// Use as Program.cs in the .NET project described earlier.
+using System;
+using PhysikX;
+using var world=new World(3);
+var d=World.BodyDefaults(); d.Shape=1; d.Layer=0;
+ulong body=world.CreateBody(d);
+world.SetDensity(body,250); world.SetMass(body,2);
+var p=world.MassProperties(body);
+Console.WriteLine($"{p.Volume} m3, {p.Mass} kg, {p.Weight} N");
+world.SetFriction(body,0.8); world.SetStrength(body,50);
+Console.WriteLine(world.Material(body).Friction);
+d=World.BodyDefaults(); d.IsStatic=1; d.Layer=0; d.Position=new Vec3(-2,0,0);
+ulong anchor=world.CreateBody(d), link=world.Distance(anchor,body,2);
+world.SetElasticity(link,1000); world.SetDistanceStrength(link,10);
+Console.WriteLine(world.DistanceProperties(link).Compliance);
+world.ApplyThrust(body,new Vec3(10,0,0),10); world.Step(1.0/120);
+var split=world.Fracture(body);
+foreach (ulong child in split.Fragments) Console.WriteLine(child);
+foreach (var e in world.BreakEvents()) Console.WriteLine($"{e.Kind}: {e.Source}");
+```
+
+### New commands in Rust
+
+Import `MassProperties`, `Material`, `DistanceProperties`, `BreakEvent` if you
+want explicit type annotations. Fields use snake_case. Queries/setters below
+return `Result` except `break_events()`, which returns a `Vec`. Constants are
+`physikx::DISTANCE_BROKEN` and `physikx::BODY_FRACTURED`.
+`event.fragment_ids()` safely views only the used part of the fixed-size array.
+
+| Command | Result | Purpose |
+| --- | --- | --- |
+| `world.mass_properties(body)` | `Result<MassProperties, String>` | Read physical quantities. |
+| `world.set_mass(body, mass)` | `Result<(), String>` | Set kg. |
+| `world.set_density(body, density)` | `Result<(), String>` | Set kg/m³ and derive mass. |
+| `world.apply_thrust(body, direction, force)` | `Result<(), String>` | Add thrust in N. |
+| `world.material(body)` | `Result<Material, String>` | Read contact settings and strength. |
+| `world.set_friction(body, friction)` | `Result<(), String>` | Change friction. |
+| `world.set_strength(body, force)` | `Result<(), String>` | Set body-fracture threshold. |
+| `world.distance_properties(link)` | `Result<DistanceProperties, String>` | Read link settings and force. |
+| `world.set_elasticity(link, stiffness)` | `Result<(), String>` | Set N/m. |
+| `world.set_distance_strength(link, force)` | `Result<(), String>` | Set link-break threshold. |
+| `world.fracture(body)` | `Result<BreakEvent, String>` | Split a dynamic body. |
+| `world.break_events()` | `Vec<BreakEvent>` | Copy current events. |
+
+```rust
+// Use as src/main.rs in the Rust project described earlier.
+use physikx::{BodyDesc, DistanceDesc, Vec3, World, WorldDesc};
+fn main() -> Result<(),String> {
+    let mut world=World::new(WorldDesc::defaults(3))?;
+    let body=world.create_body(BodyDesc{shape:1,layer:0,..BodyDesc::default()})?;
+    world.set_density(body,250.0)?; world.set_mass(body,2.0)?;
+    let p=world.mass_properties(body)?;
+    println!("{} m3, {} kg, {} N",p.volume,p.mass,p.weight);
+    world.set_friction(body,0.8)?; world.set_strength(body,50.0)?;
+    println!("{}",world.material(body)?.friction);
+    let anchor=world.create_body(BodyDesc{is_static:1,layer:0,
+        position:Vec3{x:-2.0,y:0.0,z:0.0},..BodyDesc::default()})?;
+    let link=world.distance(DistanceDesc{a:anchor,b:body,rest_length:2.0,compliance:0.0})?;
+    world.set_elasticity(link,1000.0)?; world.set_distance_strength(link,10.0)?;
+    println!("{}",world.distance_properties(link)?.compliance);
+    world.apply_thrust(body,Vec3{x:10.0,y:0.0,z:0.0},10.0)?; world.step(1.0/120.0)?;
+    let split=world.fracture(body)?;
+    for id in split.fragment_ids() { println!("{id}"); }
+    for e in world.break_events() { println!("{}: {}",e.kind,e.source); }
+    Ok(())
+}
+```
+
+### New commands in Python
+
+Returned types: `PhysikX.MassProperties`, `Material`, `DistanceProperties`,
+`BreakEvent`. Fields are snake_case; weight vector is `p.weight_force`.
+`event.fragment_ids` is a list property, not a function.
+Kinds: `PhysikX.DISTANCE_BROKEN`, `PhysikX.BODY_FRACTURED`.
+Invalid native requests raise `RuntimeError` as before.
+
+| Command | Result | Purpose |
+| --- | --- | --- |
+| `world.mass_properties(body)` | `MassProperties` | Read physical quantities. |
+| `world.set_mass(body, mass)` | `None` | Set kg. |
+| `world.set_density(body, density)` | `None` | Set kg/m³ and derive mass. |
+| `world.apply_thrust(body, direction, force)` | `None` | Add thrust in N; vector can be a tuple or `Vec3`. |
+| `world.material(body)` | `Material` | Read friction/restitution/body strength. |
+| `world.set_friction(body, friction)` | `None` | Change friction. |
+| `world.set_strength(body, force)` | `None` | Set body-fracture threshold. |
+| `world.distance_properties(link)` | `DistanceProperties` | Read link settings and estimated force. |
+| `world.set_elasticity(link, stiffness)` | `None` | Set N/m. |
+| `world.set_distance_strength(link, force)` | `None` | Set link-break threshold. |
+| `world.fracture(body)` | `BreakEvent` | Split a dynamic body. |
+| `world.break_events()` | `list[BreakEvent]` | Copy current events. |
+
+```python
+# Save as materials.py; run using the Python loader setup described earlier.
+import PhysikX
+with PhysikX.World(3) as world:
+    body=world.create_body(shape=PhysikX.BOX,layer=0)
+    world.set_density(body,250); world.set_mass(body,2)
+    p=world.mass_properties(body)
+    print(p.volume,"m3",p.mass,"kg",p.weight,"N",tuple(p.weight_force))
+    world.set_friction(body,0.8); world.set_strength(body,50)
+    print("Friction:",world.material(body).friction)
+    anchor=world.create_body(is_static=1,position=(-2,0,0),layer=0)
+    link=world.distance(anchor,body,2)
+    world.set_elasticity(link,1000); world.set_distance_strength(link,10)
+    print("Compliance:",world.distance_properties(link).compliance)
+    world.apply_thrust(body,(10,0,0),10); world.step(1/120)
+    split=world.fracture(body)  # Parent and its attached link are removed.
+    print("Fragments:",split.fragment_ids)
+    for event in world.break_events():
+        print(event.kind,event.source,event.force,event.fragment_ids)
+
+# Separate automatic-fracture example:
+with PhysikX.World(3,gravity=(0,0,0),linear_damping=0) as world:
+    body=world.create_body(mass=8)
+    world.set_strength(body,20)
+    world.apply_thrust(body,(1,0,0),30)  # 30 N exceeds 20 N.
+    world.step(1/120)
+    for event in world.break_events():
+        if event.kind==PhysikX.BODY_FRACTURED:
+            print("Removed body:",event.source,"new bodies:",event.fragment_ids)
+```
+
+### New commands in Java
+
+Results are nested records with accessors: `World.MassProperties` (`volume()`,
+`density()`, `mass()`, `weight()`, `weightX()`, `weightY()`, `weightZ()`),
+`World.Material` (`friction()`, `restitution()`, `breakingForce()`),
+`World.DistanceProperties` (`a()`, `b()`, `restLength()`, `compliance()`,
+`breakingForce()`, `force()`), and `World.BreakEvent` (`kind()`, `source()`,
+`fragments()`, `force()`). The fragment array is a copied Java array.
+Kinds: `World.DISTANCE_BROKEN`, `World.BODY_FRACTURED`.
+Native failures throw `IllegalStateException` as before.
+
+| Command | Result | Purpose |
+| --- | --- | --- |
+| `world.massProperties(body)` | `World.MassProperties` | Read physical quantities. |
+| `world.setMass(body, mass)` | `void` | Set kg. |
+| `world.setDensity(body, density)` | `void` | Set kg/m³ and derive mass. |
+| `world.applyThrust(body, x, y, z, force)` | `void` | Add thrust in N along three direction components. |
+| `world.material(body)` | `World.Material` | Read contact settings and strength. |
+| `world.setFriction(body, friction)` | `void` | Change friction. |
+| `world.setStrength(body, force)` | `void` | Set body-fracture threshold. |
+| `world.distanceProperties(link)` | `World.DistanceProperties` | Read link settings and estimated force. |
+| `world.setElasticity(link, stiffness)` | `void` | Set N/m. |
+| `world.setDistanceStrength(link, force)` | `void` | Set link-break threshold. |
+| `world.fracture(body)` | `World.BreakEvent` | Split a dynamic body. |
+| `world.breakEvents()` | `World.BreakEvent[]` | Copy current events. |
+
+```java
+// Save as Materials.java; compile alongside physikx/World.java, then run Materials.
+import physikx.World;
+public class Materials {
+    public static void main(String[] args) {
+        try (World world=new World(3)) {
+            long body=world.box(0,0,0,0.5,0.5,0.5,1,false);
+            world.setDensity(body,250); world.setMass(body,2);
+            var p=world.massProperties(body);
+            System.out.println(p.volume()+" m3, "+p.mass()+" kg, "+p.weight()+" N");
+            world.setFriction(body,0.8); world.setStrength(body,50);
+            System.out.println(world.material(body).friction());
+            long anchor=world.sphere(-2,0,0,0.1,1,true);
+            long link=world.distance(anchor,body,2,0);
+            world.setElasticity(link,1000); world.setDistanceStrength(link,10);
+            System.out.println(world.distanceProperties(link).compliance());
+            world.applyThrust(body,10,0,0,10); world.step(1.0/120);
+            var split=world.fracture(body);
+            for (long id:split.fragments()) System.out.println(id);
+            for (var event:world.breakEvents()) System.out.println(event.kind()+": "+event.source());
+        }
+    }
+}
+```
+
+Rebuild the core/JNI libraries after updating. Reusing an old `.dll`/`.so`/`.dylib`
+with these new wrappers produces missing-symbol errors. Continue rendering with
+the new IDs after a fracture; the removed parent/links are intentionally not
+accessible. See [Docs/api.md](Docs/api.md) for the complete extension contract.
 
