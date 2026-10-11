@@ -28,3 +28,19 @@ phase avoids enumerating every pair. Current limitations include per-substep
 sorting, unordered-map lookups within constraint/contact loops, linear queries,
 quadratic dense-overlap behavior and individual FFI state calls. No SIMD, GPU,
 multithreading or hard real-time guarantee is claimed.
+
+
+Material readback derives volume and density from existing body geometry/mass;
+no redundant density cache is stored. Runtime mass updates inverse mass without
+changing static flags. Thrust normalizes a direction and uses the existing force
+accumulator. Distance links track XPBD reaction estimates and optional breaking
+thresholds without changing the original public descriptor layout.
+
+Body load estimation runs only when body strength is enabled. A reusable queue
+collects eligible parent IDs after solving. Fragment creation reserves storage
+and installs child index entries before removing a copied parent; this avoids
+references into reallocating vectors. Children are unbreakable by default.
+Break events use a separate POD snapshot shared by all bindings. Events are
+cleared once per executed frame call and retained across its substeps.
+These features add per-body/per-link state; sparse-benchmark timing from alpha.1
+must not be presented as a measurement of this version.
