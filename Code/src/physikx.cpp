@@ -8,6 +8,7 @@
 #include <exception>
 #include <limits>
 #include <new>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -38,15 +39,26 @@ struct Body {
   px_body_desc d;
   px_vec3 force{}, previous{};
   double inv;
+  double breaking_force = 0, load = 0, impulse_load = 0;
 };
 struct Link {
   px_id id;
   px_distance_desc d;
   double lambda = 0;
+  double breaking_force = 0, force = 0;
+  bool broken = false;
 };
 struct Bounds {
   px_vec3 lo, hi;
 };
+double volume(const Body &b, uint32_t dimension) {
+  constexpr double pi = 3.14159265358979323846;
+  if (b.d.shape == PX_SPHERE)
+    return dimension == 2 ? pi * b.d.radius * b.d.radius
+                          : (4.0 / 3.0) * pi * b.d.radius * b.d.radius * b.d.radius;
+  return dimension == 2 ? 4 * b.d.half_extents.x * b.d.half_extents.y
+                        : 8 * b.d.half_extents.x * b.d.half_extents.y * b.d.half_extents.z;
+}
 Bounds bounds(const Body &b, uint32_t dim) {
   auto e = b.d.shape == PX_SPHERE ? px_vec3{b.d.radius, b.d.radius, b.d.radius}
                                   : b.d.half_extents;
@@ -140,6 +152,8 @@ struct px_world {
   std::vector<Link> links;
   std::vector<size_t> order;
   std::vector<px_contact> contacts;
+  std::vector<px_break_event> break_events;
+  std::vector<px_id> fracture_queue;
   px_id next = 1;
   double accumulator = 0;
   px_stats stats{};
@@ -156,6 +170,81 @@ struct px_world {
     if (d.dimension == 2)
       v.z = 0;
     return v;
+  }
+  Link *find_link(px_id id) {
+    auto it = std::find_if(links.begin(), links.end(),
+                           [&](const Link &l) { return l.id == id; });
+    return it == links.end() ? nullptr : &*it;
+  }
+  void erase_body(px_id id) {
+    auto it = indices.find(id);
+    size_t i = it->second;
+    links.erase(std::remove_if(links.begin(), links.end(),
+                  [&](const Link &l) { return l.d.a == id || l.d.b == id; }), links.end());
+    if (i + 1 < bodies.size()) {
+      bodies[i] = bodies.back();
+      indices.at(bodies[i].id) = i;
+    }
+    bodies.pop_back();
+    indices.erase(it);
+    contacts.clear();
+    stats.contacts = 0;
+  }
+  bool fragments(const Body &parent, Body (&parts)[8]) const {
+    uint32_t count = 1u << d.dimension;
+    if (!parent.inv || parent.d.mass / count < 1e-9)
+      return false;
+    for (uint32_t i = 0; i < count; ++i) {
+      parts[i] = parent;
+      auto &p = parts[i];
+      p.d.mass /= count;
+      p.inv = 1 / p.d.mass;
+      p.force = mul(parent.force, 1.0 / count);
+      p.breaking_force = p.load = p.impulse_load = 0;
+      p.d.radius *= 0.5;
+      p.d.half_extents.x *= 0.5;
+      p.d.half_extents.y *= 0.5;
+      if (d.dimension == 3) p.d.half_extents.z *= 0.5;
+      auto e = parent.d.shape == PX_SPHERE
+          ? px_vec3{parent.d.radius * 0.5, parent.d.radius * 0.5, parent.d.radius * 0.5}
+          : p.d.half_extents;
+      p.d.position = add(parent.d.position,
+          {i & 1 ? e.x : -e.x, i & 2 ? e.y : -e.y,
+           d.dimension == 3 ? (i & 4 ? e.z : -e.z) : 0});
+      p.previous = p.d.position;
+      if (!bounded(p.d.position) || p.d.radius <= 0 ||
+          p.d.half_extents.x <= 0 || p.d.half_extents.y <= 0 || p.d.half_extents.z <= 0)
+        return false;
+    }
+    return true;
+  }
+  px_break_event fracture(const Body &parent) {
+    Body parts[8];
+    if (!fragments(parent, parts)) throw std::runtime_error("Body cannot be fragmented");
+    uint32_t count = 1u << d.dimension;
+    if (next > UINT64_MAX - count) throw std::runtime_error("Handle space exhausted");
+    // Complete all allocating work before removing the parent. Roll back map
+    // nodes if allocation fails. No stale references survive vector growth.
+    bodies.reserve(bodies.size() + count);
+    indices.reserve(indices.size() + count);
+    break_events.reserve(break_events.size() + 1);
+    uint32_t inserted = 0;
+    try {
+      for (; inserted < count; ++inserted)
+        indices.emplace(next + inserted, bodies.size() + inserted);
+    } catch (...) {
+      for (uint32_t i = 0; i < inserted; ++i) indices.erase(next + i);
+      throw;
+    }
+    px_break_event event{PX_BODY_FRACTURED, count, parent.id, {}, parent.load};
+    for (uint32_t i = 0; i < count; ++i) {
+      parts[i].id = next++;
+      event.fragments[i] = parts[i].id;
+      bodies.push_back(parts[i]);
+    }
+    erase_body(parent.id);
+    break_events.push_back(event);
+    return event;
   }
   void limit(Body &b) {
     double speed = length(b.d.velocity);
@@ -196,6 +285,8 @@ struct px_world {
     double dt = d.fixed_dt;
     for (auto &b : bodies) {
       b.previous = b.d.position;
+      b.load = b.breaking_force > 0 ? std::max(length(b.force), b.impulse_load) : 0;
+      b.impulse_load = 0;
       if (!b.inv)
         continue;
       b.d.velocity =
@@ -204,11 +295,14 @@ struct px_world {
       limit(b);
       b.d.position = add(b.d.position, mul(b.d.velocity, dt));
     }
-    for (auto &l : links)
+    for (auto &l : links) {
       l.lambda = 0;
+      l.force = 0;
+    }
     // XPBD distance links: compliance is independent of iteration count.
     for (uint32_t i = 0; i < d.iterations; ++i)
       for (auto &l : links) {
+        if (l.broken) continue;
         auto *a = find(l.d.a);
         auto *b = find(l.d.b);
         auto delta = sub(b->d.position, a->d.position);
@@ -218,10 +312,26 @@ struct px_world {
         auto n = len > 1e-12 ? mul(delta, 1 / len) : px_vec3{1, 0, 0};
         double alpha = l.d.compliance / (dt * dt);
         double dl = (-(len - l.d.rest_length) - alpha * l.lambda) / (w + alpha);
+        l.force = std::abs(l.lambda + dl) / (dt * dt);
+        if (l.breaking_force > 0 && l.force > l.breaking_force) {
+          l.broken = true;
+          continue;
+        }
         l.lambda += dl;
         a->d.position = sub(a->d.position, mul(n, dl * a->inv));
         b->d.position = add(b->d.position, mul(n, dl * b->inv));
       }
+    for (auto &l : links) {
+      if (l.broken) {
+        break_events.push_back({PX_DISTANCE_BROKEN, 0, l.id, {}, l.force});
+      } else {
+        auto *a = find(l.d.a), *b = find(l.d.b);
+        if (a->breaking_force > 0) a->load = std::max(a->load, l.force);
+        if (b->breaking_force > 0) b->load = std::max(b->load, l.force);
+      }
+    }
+    links.erase(std::remove_if(links.begin(), links.end(),
+                              [](const Link &l) { return l.broken; }), links.end());
     if (!links.empty())
       for (auto &b : bodies)
         if (b.inv) {
@@ -242,6 +352,8 @@ struct px_world {
           continue;
         double e = vn < -0.5 ? std::min(a->d.restitution, b->d.restitution) : 0;
         double j = -(1 + e) * vn / w;
+        if (a->breaking_force > 0) a->load = std::max(a->load, j / dt);
+        if (b->breaking_force > 0) b->load = std::max(b->load, j / dt);
         auto impulse = mul(c.normal, j);
         a->d.velocity = sub(a->d.velocity, mul(impulse, a->inv));
         b->d.velocity = add(b->d.velocity, mul(impulse, b->inv));
@@ -268,10 +380,21 @@ struct px_world {
         a->d.position = sub(a->d.position, mul(c.normal, amount * a->inv));
         b->d.position = add(b->d.position, mul(c.normal, amount * b->inv));
       }
+    fracture_queue.clear();
     for (auto &b : bodies) {
       b.d.position = planar(b.d.position);
       b.d.velocity = planar(b.d.velocity);
       limit(b);
+      if (b.breaking_force > 0 && b.load > b.breaking_force && b.inv) {
+        Body parts[8];
+        if (fragments(b, parts)) fracture_queue.push_back(b.id);
+      }
+    }
+    // Inspect only the bodies present before fracture; children are unbreakable
+    // until the caller assigns strength, bounding fragment growth per step.
+    for (auto id : fracture_queue) {
+      Body parent = *find(id);
+      fracture(parent);
     }
     ++stats.steps;
   }
@@ -286,7 +409,7 @@ struct px_world {
     return fail(PX_INTERNAL_ERROR, "Unexpected native error");                 \
   }
 extern "C" {
-const char *px_version(void) { return "0.1.0-alpha.2"; }
+const char *px_version(void) { return "0.2.0-beta.1"; }
 const char *px_last_error(void) { return error.c_str(); }
 px_world_desc px_world_defaults(uint32_t dim) {
   return {dim, 8, 16, 0, 1.0 / 120.0, 0.05, 1000, {0, -9.81, 0}};
@@ -330,6 +453,7 @@ px_status px_world_step(px_world *w, double elapsed) {
   w->accumulator = total;
   uint32_t count = 0;
   while (w->accumulator + 1e-12 >= w->d.fixed_dt && count < w->d.max_substeps) {
+    if (count == 0) w->break_events.clear();
     w->tick();
     w->accumulator = std::max(0.0, w->accumulator - w->d.fixed_dt);
     ++count;
@@ -392,19 +516,7 @@ px_status px_body_destroy(px_world *w, px_id id) {
   auto it = w->indices.find(id);
   if (it == w->indices.end())
     return fail(PX_NOT_FOUND, "Unknown body");
-  size_t i = it->second;
-  w->links.erase(
-      std::remove_if(w->links.begin(), w->links.end(),
-                     [&](const Link &l) { return l.d.a == id || l.d.b == id; }),
-      w->links.end());
-  if (i + 1 < w->bodies.size()) {
-    w->bodies[i] = w->bodies.back();
-    w->indices[w->bodies[i].id] = i;
-  }
-  w->bodies.pop_back();
-  w->indices.erase(it);
-  w->contacts.clear();
-  w->stats.contacts = 0;
+  w->erase_body(id);
   return PX_OK;
 }
 px_status px_body_get_state(const px_world *w, px_id id, px_body_state *out) {
@@ -462,6 +574,8 @@ px_status px_body_apply_impulse(px_world *w, px_id id, px_vec3 v) {
   if (!b->inv)
     return fail(PX_INVALID_ARGUMENT, "Static body cannot receive impulses");
   b->d.velocity = add(b->d.velocity, mul(w->planar(v), b->inv));
+  if (b->breaking_force > 0)
+    b->impulse_load = std::max(b->impulse_load, length(w->planar(v)) / w->d.fixed_dt);
   w->limit(*b);
   return PX_OK;
 }
@@ -491,6 +605,108 @@ px_status px_distance_destroy(px_world *w, px_id id) {
     return fail(PX_NOT_FOUND, "Unknown constraint");
   w->links.erase(it);
   return PX_OK;
+}
+px_status px_body_get_mass_properties(const px_world *w, px_id id, px_mass_properties *out) {
+  if (!w || !out) return fail(PX_INVALID_ARGUMENT, "Null world or output");
+  auto *b = w->find(id);
+  if (!b) return fail(PX_NOT_FOUND, "Unknown body");
+  double v = volume(*b, w->d.dimension), density = b->d.mass / v;
+  if (!(v > 0) || !std::isfinite(v) || !std::isfinite(density))
+    return fail(PX_INVALID_ARGUMENT, "Geometry is too small for finite mass properties");
+  auto weight = mul(w->d.gravity, b->d.mass);
+  *out = {v, density, b->d.mass, length(weight), weight};
+  return PX_OK;
+}
+px_status px_body_set_mass(px_world *w, px_id id, double mass) {
+  if (!w || !std::isfinite(mass) || mass < 1e-9 || mass > 1e12)
+    return fail(PX_INVALID_ARGUMENT, "Mass must be in [1e-9,1e12] kg");
+  auto *b = w->find(id);
+  if (!b) return fail(PX_NOT_FOUND, "Unknown body");
+  b->d.mass = mass;
+  b->inv = b->d.is_static ? 0 : 1 / mass;
+  return PX_OK;
+}
+px_status px_body_set_density(px_world *w, px_id id, double density) {
+  if (!w || !std::isfinite(density) || density <= 0)
+    return fail(PX_INVALID_ARGUMENT, "Density must be finite and positive");
+  auto *b = w->find(id);
+  if (!b) return fail(PX_NOT_FOUND, "Unknown body");
+  return px_body_set_mass(w, id, density * volume(*b, w->d.dimension));
+}
+px_status px_body_apply_thrust(px_world *w, px_id id, px_vec3 direction, double force) {
+  if (!w || !bounded(direction) || !std::isfinite(force) || force < 0 || force > 1e9)
+    return fail(PX_INVALID_ARGUMENT, "Invalid thrust direction or force");
+  direction = w->planar(direction);
+  double len = length(direction);
+  if (len < 1e-12) return fail(PX_INVALID_ARGUMENT, "Zero thrust direction");
+  return px_body_apply_force(w, id, mul(direction, force / len));
+}
+px_status px_body_get_material(const px_world *w, px_id id, px_material *out) {
+  if (!w || !out) return fail(PX_INVALID_ARGUMENT, "Null world or output");
+  auto *b = w->find(id);
+  if (!b) return fail(PX_NOT_FOUND, "Unknown body");
+  *out = {b->d.friction, b->d.restitution, b->breaking_force};
+  return PX_OK;
+}
+px_status px_body_set_friction(px_world *w, px_id id, double friction) {
+  if (!w || !std::isfinite(friction) || friction < 0 || friction > 10)
+    return fail(PX_INVALID_ARGUMENT, "Friction must be in [0,10]");
+  auto *b = w->find(id);
+  if (!b) return fail(PX_NOT_FOUND, "Unknown body");
+  b->d.friction = friction;
+  return PX_OK;
+}
+px_status px_body_set_strength(px_world *w, px_id id, double force) {
+  if (!w || !std::isfinite(force) || force < 0 || force > 1e12)
+    return fail(PX_INVALID_ARGUMENT, "Breaking force must be in [0,1e12] N");
+  auto *b = w->find(id);
+  if (!b) return fail(PX_NOT_FOUND, "Unknown body");
+  if (force > 0 && !b->inv) return fail(PX_INVALID_ARGUMENT, "Static body cannot fracture");
+  b->breaking_force = force;
+  return PX_OK;
+}
+px_status px_distance_get_properties(const px_world *w, px_id id, px_distance_properties *out) {
+  if (!w || !out) return fail(PX_INVALID_ARGUMENT, "Null world or output");
+  auto it = std::find_if(w->links.begin(), w->links.end(), [&](const Link &l) { return l.id == id; });
+  if (it == w->links.end()) return fail(PX_NOT_FOUND, "Unknown constraint");
+  *out = {it->d.a, it->d.b, it->d.rest_length, it->d.compliance, it->breaking_force, it->force};
+  return PX_OK;
+}
+px_status px_distance_set_elasticity(px_world *w, px_id id, double stiffness) {
+  if (!w || !std::isfinite(stiffness) || stiffness < 1e-9 || stiffness > 1e12)
+    return fail(PX_INVALID_ARGUMENT, "Stiffness must be in [1e-9,1e12] N/m");
+  auto *l = w->find_link(id);
+  if (!l) return fail(PX_NOT_FOUND, "Unknown constraint");
+  l->d.compliance = 1 / stiffness;
+  l->lambda = l->force = 0;
+  return PX_OK;
+}
+px_status px_distance_set_strength(px_world *w, px_id id, double force) {
+  if (!w || !std::isfinite(force) || force < 0 || force > 1e12)
+    return fail(PX_INVALID_ARGUMENT, "Breaking force must be in [0,1e12] N");
+  auto *l = w->find_link(id);
+  if (!l) return fail(PX_NOT_FOUND, "Unknown constraint");
+  l->breaking_force = force;
+  return PX_OK;
+}
+px_status px_body_fracture(px_world *w, px_id id, px_break_event *out) {
+  PX_GUARD_BEGIN
+  if (!w || !out) return fail(PX_INVALID_ARGUMENT, "Null world or output");
+  auto *b = w->find(id);
+  if (!b) return fail(PX_NOT_FOUND, "Unknown body");
+  Body parent = *b, parts[8];
+  if (!w->fragments(parent, parts))
+    return fail(PX_INVALID_ARGUMENT, "Fracture needs a dynamic body, valid child positions and mass >= child_count * 1e-9 kg");
+  if (w->next > UINT64_MAX - (1u << w->d.dimension))
+    return fail(PX_INTERNAL_ERROR, "Handle space exhausted");
+  *out = w->fracture(parent);
+  return PX_OK;
+  PX_GUARD_END
+}
+size_t px_world_break_events(const px_world *w, px_break_event *out, size_t capacity) {
+  if (!w) { fail(PX_INVALID_ARGUMENT, "Null world"); return 0; }
+  if (out) std::copy_n(w->break_events.begin(), std::min(capacity, w->break_events.size()), out);
+  return w->break_events.size();
 }
 size_t px_world_contacts(const px_world *w, px_contact *out, size_t cap) {
   if (!w) {
