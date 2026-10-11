@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — documentation update, 2026-10-11
+
+- Appended a complete English command guide to README for all six supported languages.
+- Explained current API names, arguments, return values, descriptor settings, units, errors and ownership.
+- Added complete usage programs, Windows/Linux/macOS loader guidance and query/result explanations.
+- Explicitly documented wrapper coverage gaps and common integration mistakes.
+- Updated the roadmap and repository structure documentation; simulation code and ABI are unchanged.
+
 ## 0.1.0-alpha.2 — 2026-10-10
 
 - Replaced MIT terms for new distributions with the PhysikX Proprietary Evaluation License 1.0.
