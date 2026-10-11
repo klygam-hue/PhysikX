@@ -54,3 +54,27 @@ CCD stress, realistic material validation and performance regressions.
 - Updated native library compiled with GCC 13.3 and strict warning flags.
 - Native/Python version strings and a 2D binding smoke check passed.
 - Archive hashes verified; physics regression behavior is unchanged by this revision.
+
+
+## 0.2.0-beta.1 extension checks — 2026-10-11
+
+Completed locally against a freshly compiled C++17 Release shared library:
+
+- 28 native regression cases (the 20 original cases plus volume/density/weight,
+  inverse-mass mutation, normalized thrust, runtime contact friction, analytical
+  XPBD stiffness/link breaking, all 2D/3D sphere/box fragment invariants,
+  automatic load/impulse/contact fracture, event lifetime and invalid requests).
+- 14 Python regression cases, including new ctypes output sizes, material queries,
+  elasticity, copied event IDs and manual/automatic fragmentation.
+- Strict C11 smoke build and execution against the shared library.
+- Complete new C/C++/Python examples extracted from README, compiled/run successfully.
+- AddressSanitizer + UndefinedBehaviorSanitizer: all 28 native cases passed locally
+  with leak scanning disabled for this container. Hosted leak checking remains enabled.
+- Original 64/128-byte descriptor sizes retained; new output sizes checked by tests.
+
+The local environment lacks Rust/.NET/JDK development tools. Updated Rust tests
+and C#/Java smoke programs exercise all twelve new commands in the hosted
+bindings job; their new results must be checked in Actions before release claims.
+Cross-platform CI also runs native/Python tests on Linux, Windows and macOS and
+native/C tests with sanitizers. Earlier version results above are historical;
+they are not new performance measurements or platform validation of this change.
