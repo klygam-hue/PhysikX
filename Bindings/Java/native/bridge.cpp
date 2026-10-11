@@ -5,6 +5,8 @@
 #include <PhysikX/physikx.h>
 #include <cstdint>
 #include <jni.h>
+#include <new>
+#include <vector>
 static px_world *world(jlong handle) {
   return reinterpret_cast<px_world *>(static_cast<uintptr_t>(handle));
 }
@@ -15,6 +17,22 @@ static bool check(JNIEnv *env, px_status status) {
   if (klass)
     env->ThrowNew(klass, px_last_error());
   return false;
+}
+static jobject event_object(JNIEnv *env, const px_break_event &value) {
+  auto klass = env->FindClass("physikx/World$BreakEvent");
+  if (!klass) return nullptr;
+  auto ctor = env->GetMethodID(klass, "<init>", "(IJ[JD)V");
+  if (!ctor) { env->DeleteLocalRef(klass); return nullptr; }
+  auto ids = env->NewLongArray(value.count);
+  if (!ids) { env->DeleteLocalRef(klass); return nullptr; }
+  jlong data[8];
+  for (uint32_t i = 0; i < value.count; ++i) data[i] = static_cast<jlong>(value.fragments[i]);
+  env->SetLongArrayRegion(ids, 0, value.count, data);
+  jobject out = env->ExceptionCheck() ? nullptr : env->NewObject(klass, ctor,
+      static_cast<jint>(value.kind), static_cast<jlong>(value.source), ids, value.force);
+  env->DeleteLocalRef(ids);
+  env->DeleteLocalRef(klass);
+  return out;
 }
 extern "C" {
 JNIEXPORT jlong JNICALL Java_physikx_World_create(JNIEnv *env, jclass,
@@ -104,5 +122,89 @@ JNIEXPORT jlong JNICALL Java_physikx_World_distanceNative(JNIEnv *env, jclass,
 JNIEXPORT void JNICALL Java_physikx_World_removeDistance(JNIEnv *env, jclass,
                                                          jlong w, jlong id) {
   check(env, px_distance_destroy(world(w), id));
+}
+JNIEXPORT jobject JNICALL Java_physikx_World_propertiesNative(JNIEnv *env, jclass,
+    jlong w, jlong id, jint operation) {
+  if (operation == 0) {
+    px_mass_properties value{};
+    if (!check(env, px_body_get_mass_properties(world(w), id, &value))) return nullptr;
+    auto klass = env->FindClass("physikx/World$MassProperties");
+    if (!klass) return nullptr;
+    auto ctor = env->GetMethodID(klass, "<init>", "(DDDDDDD)V");
+    jobject out = ctor ? env->NewObject(klass, ctor, value.volume, value.density,
+        value.mass, value.weight, value.weight_force.x, value.weight_force.y,
+        value.weight_force.z) : nullptr;
+    env->DeleteLocalRef(klass);
+    return out;
+  }
+  if (operation == 1) {
+    px_material value{};
+    if (!check(env, px_body_get_material(world(w), id, &value))) return nullptr;
+    auto klass = env->FindClass("physikx/World$Material");
+    if (!klass) return nullptr;
+    auto ctor = env->GetMethodID(klass, "<init>", "(DDD)V");
+    jobject out = ctor ? env->NewObject(klass, ctor, value.friction, value.restitution,
+        value.breaking_force) : nullptr;
+    env->DeleteLocalRef(klass);
+    return out;
+  }
+  px_distance_properties value{};
+  if (!check(env, px_distance_get_properties(world(w), id, &value))) return nullptr;
+  auto klass = env->FindClass("physikx/World$DistanceProperties");
+  if (!klass) return nullptr;
+  auto ctor = env->GetMethodID(klass, "<init>", "(JJDDDD)V");
+  jobject out = ctor ? env->NewObject(klass, ctor, static_cast<jlong>(value.a),
+      static_cast<jlong>(value.b), value.rest_length, value.compliance,
+      value.breaking_force, value.force) : nullptr;
+  env->DeleteLocalRef(klass);
+  return out;
+}
+JNIEXPORT void JNICALL Java_physikx_World_scalar(JNIEnv *env, jclass,
+    jlong w, jlong id, jint operation, jdouble value) {
+  px_status result = PX_INVALID_ARGUMENT;
+  switch (operation) {
+    case 0: result = px_body_set_mass(world(w), id, value); break;
+    case 1: result = px_body_set_density(world(w), id, value); break;
+    case 2: result = px_body_set_friction(world(w), id, value); break;
+    case 3: result = px_body_set_strength(world(w), id, value); break;
+    case 4: result = px_distance_set_elasticity(world(w), id, value); break;
+    case 5: result = px_distance_set_strength(world(w), id, value); break;
+  }
+  check(env, result);
+}
+JNIEXPORT void JNICALL Java_physikx_World_thrustNative(JNIEnv *env, jclass,
+    jlong w, jlong id, jdouble x, jdouble y, jdouble z, jdouble force) {
+  check(env, px_body_apply_thrust(world(w), id, {x, y, z}, force));
+}
+JNIEXPORT jobject JNICALL Java_physikx_World_fractureNative(JNIEnv *env, jclass,
+    jlong w, jlong id) {
+  px_break_event value{};
+  if (!check(env, px_body_fracture(world(w), id, &value))) return nullptr;
+  return event_object(env, value);
+}
+JNIEXPORT jobjectArray JNICALL Java_physikx_World_breakEventsNative(JNIEnv *env, jclass, jlong w) {
+  try {
+    auto count = px_world_break_events(world(w), nullptr, 0);
+    if (count > static_cast<size_t>(INT32_MAX)) throw std::bad_alloc();
+    std::vector<px_break_event> values(count);
+    px_world_break_events(world(w), values.data(), count);
+    auto klass = env->FindClass("physikx/World$BreakEvent");
+    if (!klass) return nullptr;
+    auto out = env->NewObjectArray(static_cast<jsize>(count), klass, nullptr);
+    env->DeleteLocalRef(klass);
+    if (!out) return nullptr;
+    for (size_t i = 0; i < count; ++i) {
+      auto value = event_object(env, values[i]);
+      if (!value) return nullptr;
+      env->SetObjectArrayElement(out, static_cast<jsize>(i), value);
+      env->DeleteLocalRef(value);
+      if (env->ExceptionCheck()) return nullptr;
+    }
+    return out;
+  } catch (...) {
+    auto klass = env->FindClass("java/lang/OutOfMemoryError");
+    if (klass) { env->ThrowNew(klass, "Cannot copy PhysikX break events"); env->DeleteLocalRef(klass); }
+    return nullptr;
+  }
 }
 }
