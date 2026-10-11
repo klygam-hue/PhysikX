@@ -8,6 +8,13 @@ package physikx;
  * single-threaded.
  */
 public final class World implements AutoCloseable {
+  public static final int DISTANCE_BROKEN = 0, BODY_FRACTURED = 1;
+  public record MassProperties(double volume, double density, double mass, double weight,
+                               double weightX, double weightY, double weightZ) {}
+  public record Material(double friction, double restitution, double breakingForce) {}
+  public record DistanceProperties(long a, long b, double restLength, double compliance,
+                                   double breakingForce, double force) {}
+  public record BreakEvent(int kind, long source, long[] fragments, double force) {}
   static { System.loadLibrary("PhysikXJNI"); }
   private long handle;
   public World(int dimension) { handle = create(dimension); }
@@ -54,6 +61,24 @@ public final class World implements AutoCloseable {
     return distanceNative(checked(), a, b, length, compliance);
   }
   public void destroyDistance(long id) { removeDistance(checked(), id); }
+  public MassProperties massProperties(long id) {
+    return (MassProperties) propertiesNative(checked(), id, 0);
+  }
+  public Material material(long id) { return (Material) propertiesNative(checked(), id, 1); }
+  public DistanceProperties distanceProperties(long id) {
+    return (DistanceProperties) propertiesNative(checked(), id, 2);
+  }
+  public void setMass(long id, double value) { scalar(checked(), id, 0, value); }
+  public void setDensity(long id, double value) { scalar(checked(), id, 1, value); }
+  public void setFriction(long id, double value) { scalar(checked(), id, 2, value); }
+  public void setStrength(long id, double value) { scalar(checked(), id, 3, value); }
+  public void setElasticity(long id, double value) { scalar(checked(), id, 4, value); }
+  public void setDistanceStrength(long id, double value) { scalar(checked(), id, 5, value); }
+  public void applyThrust(long id, double x, double y, double z, double force) {
+    thrustNative(checked(), id, x, y, z, force);
+  }
+  public BreakEvent fracture(long id) { return fractureNative(checked(), id); }
+  public BreakEvent[] breakEvents() { return breakEventsNative(checked()); }
   private static native long create(int dimension);
   private static native void destroy(long world);
   private static native long body(long world, int shape, double x, double y,
@@ -67,4 +92,9 @@ public final class World implements AutoCloseable {
   private static native long distanceNative(long world, long a, long b,
                                             double length, double compliance);
   private static native void removeDistance(long world, long constraint);
+  private static native Object propertiesNative(long world, long id, int operation);
+  private static native void scalar(long world, long id, int operation, double value);
+  private static native void thrustNative(long world, long id, double x, double y, double z, double force);
+  private static native BreakEvent fractureNative(long world, long id);
+  private static native BreakEvent[] breakEventsNative(long world);
 }
