@@ -2,7 +2,7 @@
 
 Build the native library first. Match architecture (for example x64 with x64),
 and keep the native binary discoverable by the platform loader. Bindings ship
-as sources in this alpha; they are not published to PyPI, NuGet, crates.io or Maven.
+as sources in this beta; they are not published to PyPI, NuGet, crates.io or Maven.
 
 ## C and C++
 
@@ -79,3 +79,15 @@ forces, impulses, setters and constraints. Advanced world/material descriptor
 settings and spatial queries are not exposed in this wrapper yet; use the C ABI
 or extend the bridge until binding parity is delivered. Do not concurrently
 access or close a world; do not retain native handles outside the wrapper.
+
+
+## Materials extension parity
+
+All twelve new mass/material/thrust/elasticity/fracture operations are available
+in every supported language. C/Python/C++ retain their existing query coverage;
+this extension does not add spatial-query or advanced-world-settings parity to
+C#/Rust/Java. Follow the final README tables for each wrapper's exact method names
+and returned structures. Event arrays and records are copied into managed storage;
+the original body's handle becomes invalid immediately after fracture.
+Rebuild both the core and JNI library before using new wrappers. Old binaries
+cannot provide the new exported symbols even though original layouts are preserved.
