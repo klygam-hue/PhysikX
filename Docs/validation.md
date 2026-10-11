@@ -72,9 +72,17 @@ Completed locally against a freshly compiled C++17 Release shared library:
   with leak scanning disabled for this container. Hosted leak checking remains enabled.
 - Original 64/128-byte descriptor sizes retained; new output sizes checked by tests.
 
-The local environment lacks Rust/.NET/JDK development tools. Updated Rust tests
-and C#/Java smoke programs exercise all twelve new commands in the hosted
-bindings job; their new results must be checked in Actions before release claims.
-Cross-platform CI also runs native/Python tests on Linux, Windows and macOS and
-native/C tests with sanitizers. Earlier version results above are historical;
-they are not new performance measurements or platform validation of this change.
+Hosted verification completed successfully for commit
+`c1f2f4b98cd94b62f64112a71f23031737ea42cc` in
+[Build and test #27](https://github.com/klygam-hue/PhysikX/actions/runs/38158873673):
+
+- Native/C and 14 Python tests passed on Windows, Linux and macOS.
+- All four Rust owning/FFI tests passed against version 0.2.0-beta.1.
+- C# P/Invoke smoke checks passed, including new output layouts and break events.
+- Java source/JNI compilation and material/thrust/fracture smoke checks passed.
+- Hosted ASan/UBSan native and C ABI tests passed with default leak checking.
+
+All five jobs concluded success. Rust/.NET/JDK development tools are unavailable
+in the local container, so their validation came from the hosted bindings job.
+Earlier version results above are historical; this run is not a new performance
+measurement or validation of an arbitrary production scene.
