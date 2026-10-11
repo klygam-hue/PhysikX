@@ -42,6 +42,36 @@ public struct Stats {
   public ulong Bodies, Constraints, Candidates, Contacts, Steps;
   public double DroppedTime;
 }
+[StructLayout(LayoutKind.Sequential)]
+public struct MassProperties {
+  public double Volume, Density, Mass, Weight;
+  public Vec3 WeightForce;
+}
+[StructLayout(LayoutKind.Sequential)]
+public struct Material {
+  public double Friction, Restitution, BreakingForce;
+}
+[StructLayout(LayoutKind.Sequential)]
+public struct DistanceProperties {
+  public ulong A, B;
+  public double RestLength, Compliance, BreakingForce, Force;
+}
+public enum BreakKind : uint { DistanceBroken = 0, BodyFractured = 1 }
+[StructLayout(LayoutKind.Sequential)]
+public struct BreakEvent {
+  public BreakKind Kind;
+  public uint Count;
+  public ulong Source;
+  private ulong f0, f1, f2, f3, f4, f5, f6, f7;
+  public double Force;
+  public ulong[] Fragments {
+    get {
+      var all = new[] { f0, f1, f2, f3, f4, f5, f6, f7 };
+      Array.Resize(ref all, (int)Math.Min(Count, 8u));
+      return all;
+    }
+  }
+}
 internal static class Native {
   private const string Lib = "PhysikX";
   [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
@@ -85,6 +115,30 @@ internal static class Native {
   px_distance_create(IntPtr world, in DistanceDesc desc, out ulong id);
   [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
   internal static extern int px_distance_destroy(IntPtr world, ulong id);
+  [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+  internal static extern int px_body_get_mass_properties(IntPtr world, ulong id, out MassProperties value);
+  [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+  internal static extern int px_body_set_mass(IntPtr world, ulong id, double value);
+  [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+  internal static extern int px_body_set_density(IntPtr world, ulong id, double value);
+  [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+  internal static extern int px_body_apply_thrust(IntPtr world, ulong id, Vec3 direction, double force);
+  [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+  internal static extern int px_body_get_material(IntPtr world, ulong id, out Material value);
+  [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+  internal static extern int px_body_set_friction(IntPtr world, ulong id, double value);
+  [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+  internal static extern int px_body_set_strength(IntPtr world, ulong id, double value);
+  [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+  internal static extern int px_distance_get_properties(IntPtr world, ulong id, out DistanceProperties value);
+  [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+  internal static extern int px_distance_set_elasticity(IntPtr world, ulong id, double value);
+  [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+  internal static extern int px_distance_set_strength(IntPtr world, ulong id, double value);
+  [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+  internal static extern int px_body_fracture(IntPtr world, ulong id, out BreakEvent value);
+  [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+  internal static extern nuint px_world_break_events(IntPtr world, [Out] BreakEvent[]? output, nuint capacity);
 }
 /// <summary>A single-threaded native physics world. Always dispose
 /// it.</summary>
@@ -153,5 +207,34 @@ public sealed class World : IDisposable {
   public Stats Statistics() {
     Check(Native.px_world_get_stats(Handle, out var value));
     return value;
+  }
+  public MassProperties MassProperties(ulong id) {
+    Check(Native.px_body_get_mass_properties(Handle, id, out var value));
+    return value;
+  }
+  public void SetMass(ulong id, double value) => Check(Native.px_body_set_mass(Handle, id, value));
+  public void SetDensity(ulong id, double value) => Check(Native.px_body_set_density(Handle, id, value));
+  public void ApplyThrust(ulong id, Vec3 direction, double force) => Check(Native.px_body_apply_thrust(Handle, id, direction, force));
+  public Material Material(ulong id) {
+    Check(Native.px_body_get_material(Handle, id, out var value));
+    return value;
+  }
+  public void SetFriction(ulong id, double value) => Check(Native.px_body_set_friction(Handle, id, value));
+  public void SetStrength(ulong id, double value) => Check(Native.px_body_set_strength(Handle, id, value));
+  public DistanceProperties DistanceProperties(ulong id) {
+    Check(Native.px_distance_get_properties(Handle, id, out var value));
+    return value;
+  }
+  public void SetElasticity(ulong id, double value) => Check(Native.px_distance_set_elasticity(Handle, id, value));
+  public void SetDistanceStrength(ulong id, double value) => Check(Native.px_distance_set_strength(Handle, id, value));
+  public BreakEvent Fracture(ulong id) {
+    Check(Native.px_body_fracture(Handle, id, out var value));
+    return value;
+  }
+  public BreakEvent[] BreakEvents() {
+    nuint count = Native.px_world_break_events(Handle, null, 0);
+    var result = new BreakEvent[checked((int)count)];
+    Native.px_world_break_events(Handle, result, count);
+    return result;
   }
 }
