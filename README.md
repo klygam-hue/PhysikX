@@ -8,6 +8,11 @@ not a production-complete replacement for mature rigid-body engines.
 One C++17 core exposes a C ABI. C++, C, C#, Rust, Python and Java use the same
 simulation. All code, API names, examples and documentation are in English.
 
+**Command instructions:** [C](#c-command-reference) · [C++](#c-command-reference-1) ·
+[C#](#c-command-reference-2) · [Rust](#rust-command-reference) ·
+[Python](#python-command-reference) · **[Java: complete command reference](#java-command-reference)**.
+Java readers can also jump directly to the [materials example and run instructions](#new-commands-in-java).
+
 ## Implemented
 
 - 2D circles / axis-aligned rectangles and 3D spheres / axis-aligned boxes.
@@ -832,11 +837,19 @@ No third-party Python physics package is required.
 <a id="java-command-reference"></a>
 ### Java command reference
 
+This section lists **every public Java command**, including mass, thrust, friction,
+elasticity and fracture. Read the table below, run `Commands.java` for the original
+operations, then follow [New commands in Java](#new-commands-in-java) for the
+material records, a complete `Materials.java` program and platform-specific run commands.
+
 Import `physikx.World`. Build the JNI bridge and load both the JNI library and
 the core library using the instructions in [Docs/bindings.md](Docs/bindings.md).
 IDs are `long`; treat them as opaque native identifiers.
 Native failures and use after close throw `IllegalStateException`. A missing JNI
-library causes `UnsatisfiedLinkError` during class loading.
+library causes `UnsatisfiedLinkError` during class loading. Numeric physics
+arguments are `double`, IDs are `long`, and static flags are `boolean`.
+For 2D, use `new World(2)`, supply `z = 0`, and keep all box half extents positive.
+Java record properties are methods: write `p.mass()`, not `p.mass`.
 
 | Command | Result | Explanation |
 | --- | --- | --- |
@@ -853,6 +866,18 @@ library causes `UnsatisfiedLinkError` during class loading.
 | `world.destroyBody(body)` | `void` | Delete the body and attached constraints. |
 | `world.distance(a, b, length, compliance)` | `long` constraint ID | Create a distance link. Both length and compliance are required; pass `0.0` for rigid distance. |
 | `world.destroyDistance(link)` | `void` | Delete a link. |
+| `world.massProperties(body)` | `World.MassProperties` | Read volume in m³, density in kg/m³, mass in kg, weight in N and the gravity-force components. Use record accessors such as `p.volume()` and `p.weight()`. |
+| `world.setMass(body, mass)` | `void` | Set mass in kg (`1e-9..1e12`); shape and current velocity stay unchanged. |
+| `world.setDensity(body, density)` | `void` | Set positive density in kg/m³; mass becomes density times volume and must remain in the allowed mass range. |
+| `world.applyThrust(body, x, y, z, force)` | `void` | Add thrust in N (`0..1e9`) along a nonzero direction, normalized internally. Reapply before each frame step for continuous thrust. |
+| `world.material(body)` | `World.Material` | Read `friction()`, `restitution()` and `breakingForce()`. The record is a snapshot. |
+| `world.setFriction(body, friction)` | `void` | Set contact friction (`0..10`) while the world is running. |
+| `world.setStrength(body, force)` | `void` | Set the dynamic body's automatic fracture threshold in N (`0..1e12`); `0` disables it. Positive strength on a static body is rejected. |
+| `world.distanceProperties(link)` | `World.DistanceProperties` | Read endpoint IDs, rest length, compliance, breaking threshold and the latest estimated reaction force. |
+| `world.setElasticity(link, stiffness)` | `void` | Set link stiffness in N/m (`1e-9..1e12`); compliance becomes `1 / stiffness`. |
+| `world.setDistanceStrength(link, force)` | `void` | Set the link's automatic breaking threshold in N (`0..1e12`); `0` disables it. |
+| `world.fracture(body)` | `World.BreakEvent` | Split one dynamic body into 4 children in 2D or 8 in 3D. The parent ID becomes invalid; continue with `event.fragments()`. |
+| `world.breakEvents()` | `World.BreakEvent[]` | Copy current break events. Poll after a step or manual fracture; the next step that actually executes clears the previous list. |
 | `world.close()` / end of try-with-resources | `void` | Release the world. Repeated close is safe; use try-with-resources for cleanup on exceptions. |
 
 Java does not yet expose descriptors, restitution setters, collision masks, statistics,
@@ -1000,6 +1025,10 @@ Available since **0.2.0-beta.1** in all six supported languages. Rebuild the
 native library and use matching wrappers: the new wrappers require the new
 exports. Existing ABI v1 descriptor layouts and existing function signatures
 are unchanged. Old applications can continue to use their original commands.
+
+**Command tables and examples:** [C](#new-commands-in-c) · [C++](#new-commands-in-c-1) ·
+[C#](#new-commands-in-c-2) · [Rust](#new-commands-in-rust) ·
+[Python](#new-commands-in-python) · **[Java](#new-commands-in-java)**.
 
 ### Physical meaning and units
 
@@ -1394,6 +1423,62 @@ public class Materials {
     }
 }
 ```
+
+#### Build and run Materials.java
+
+Use **JDK 17 or later** and save the preceding program as `Materials.java` in the
+repository root. Its filename must match `public class Materials`. Run these
+commands from that same folder. The JNI build is required for Java.
+
+**Linux:**
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPHYSIKX_BUILD_JAVA=ON
+cmake --build build --parallel
+mkdir -p build/java
+javac -d build/java Bindings/Java/src/main/java/physikx/World.java Materials.java
+LD_LIBRARY_PATH="$PWD/build:${LD_LIBRARY_PATH:-}" java -Djava.library.path=build -cp build/java Materials
+```
+
+**macOS:**
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPHYSIKX_BUILD_JAVA=ON
+cmake --build build --parallel
+mkdir -p build/java
+javac -d build/java Bindings/Java/src/main/java/physikx/World.java Materials.java
+DYLD_LIBRARY_PATH="$PWD/build:${DYLD_LIBRARY_PATH:-}" java -Djava.library.path=build -cp build/java Materials
+```
+
+**Windows PowerShell** (with the Visual Studio C++ build tools and a matching JDK):
+
+```powershell
+cmake -S . -B build -DPHYSIKX_BUILD_JAVA=ON
+cmake --build build --config Release --parallel
+New-Item -ItemType Directory -Force build/java | Out-Null
+javac -d build/java Bindings/Java/src/main/java/physikx/World.java Materials.java
+$env:PATH = "$((Resolve-Path build/Release).Path);$env:PATH"
+java "-Djava.library.path=build/Release" -cp build/java Materials
+```
+
+If CMake cannot find JNI, set `JAVA_HOME` to your JDK installation, then rerun
+configuration. These paths use the default generators described in the build
+section; adjust them if your native output folder differs. The JDK and native
+libraries must have the same CPU architecture. Both `PhysikXJNI` and `PhysikX`
+must be available to the loader.
+
+The program prints a box volume of `1.0` m³, mass `2.0` kg and weight `19.62` N
+(the last decimal digits may differ), followed by friction, compliance, eight
+fragment IDs and break events. With `new World(2)`, fracture returns four IDs.
+For repeated thrust, call `world.applyThrust(...)` before each `world.step(...)`.
+
+| Java symptom | What to check |
+| --- | --- |
+| `package physikx does not exist` | Include `Bindings/Java/src/main/java/physikx/World.java` in the `javac` command exactly as above. |
+| `Could not find or load main class Materials` | Compile to `build/java`, use `-cp build/java`, and run the class name `Materials` without `.java`. |
+| `UnsatisfiedLinkError: no PhysikXJNI` | Build with `-DPHYSIKX_BUILD_JAVA=ON` and point `-Djava.library.path` at the folder containing the JNI binary. |
+| JNI loads but a core dependency or new native symbol is missing | Rebuild both libraries from the same version, use the current `World.java`, and set the platform loader path shown above. |
+| Unknown body or link after fracture | Use the child IDs from `event.fragments()`; the old parent and attached links were removed. |
 
 Rebuild the core/JNI libraries after updating. Reusing an old `.dll`/`.so`/`.dylib`
 with these new wrappers produces missing-symbol errors. Continue rendering with
