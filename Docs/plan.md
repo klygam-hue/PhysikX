@@ -26,6 +26,18 @@
 - [x] Added complete per-language command examples and platform-specific setup instructions.
 - [x] Documented current wrapper gaps without claiming unimplemented query/settings parity.
 
+## Delivered: 0.2.0-beta.1
+
+- [x] Volume, density, mass and gravitational weight readback.
+- [x] Runtime mass/density/friction setters and directional thrust.
+- [x] Elastic distance stiffness and load-based link breaking.
+- [x] Manual/automatic primitive fracture, conserved mass/momentum and copied event IDs.
+- [x] All new operations exposed in six languages, with full README examples.
+- [x] Analytical material and fracture regressions, ABI layout checks and binding smoke checks.
+
+This fracture model uses force thresholds and primitive replacement. It is not a
+continuum stress, plastic deformation or arbitrary-mesh cutting model.
+
 ## Next: rotation and robust rigid bodies
 
 - [ ] Quaternion orientation, angular velocity, torque, inertia tensors.
