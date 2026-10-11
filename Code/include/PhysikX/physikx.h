@@ -65,6 +65,24 @@ typedef struct {
   uint64_t bodies, constraints, candidates, contacts, steps;
   double dropped_time;
 } px_stats;
+/* Additive ABI v1 extensions: existing descriptor layouts are unchanged. */
+typedef struct {
+  double volume, density, mass, weight;
+  px_vec3 weight_force;
+} px_mass_properties;
+typedef struct {
+  double friction, restitution, breaking_force;
+} px_material;
+typedef struct {
+  px_id a, b;
+  double rest_length, compliance, breaking_force, force;
+} px_distance_properties;
+typedef enum { PX_DISTANCE_BROKEN = 0, PX_BODY_FRACTURED = 1 } px_break_kind;
+typedef struct {
+  uint32_t kind, count;
+  px_id source, fragments[8];
+  double force;
+} px_break_event;
 PX_API const char *px_version(void);
 PX_API const char *px_last_error(void); /* thread-local; never free */
 PX_API px_world_desc px_world_defaults(uint32_t dimension);
@@ -90,6 +108,28 @@ PX_API px_status px_body_apply_impulse(px_world *world, px_id body,
 PX_API px_status px_distance_create(px_world *world,
                                     const px_distance_desc *desc, px_id *out);
 PX_API px_status px_distance_destroy(px_world *world, px_id constraint);
+PX_API px_status px_body_get_mass_properties(const px_world *world, px_id body,
+                                             px_mass_properties *out);
+PX_API px_status px_body_set_mass(px_world *world, px_id body, double mass);
+PX_API px_status px_body_set_density(px_world *world, px_id body, double density);
+PX_API px_status px_body_apply_thrust(px_world *world, px_id body,
+                                     px_vec3 direction, double force);
+PX_API px_status px_body_get_material(const px_world *world, px_id body,
+                                      px_material *out);
+PX_API px_status px_body_set_friction(px_world *world, px_id body, double friction);
+/* Force thresholds in N. Zero disables fracture/breaking. */
+PX_API px_status px_body_set_strength(px_world *world, px_id body, double force);
+PX_API px_status px_distance_get_properties(const px_world *world, px_id link,
+                                            px_distance_properties *out);
+/* stiffness in N/m, >0; use the original compliance=0 for rigid links. */
+PX_API px_status px_distance_set_elasticity(px_world *world, px_id link,
+                                           double stiffness);
+PX_API px_status px_distance_set_strength(px_world *world, px_id link, double force);
+/* Atomically replace a dynamic primitive by 4 (2D) or 8 (3D) fragments. */
+PX_API px_status px_body_fracture(px_world *world, px_id body, px_break_event *out);
+/* Events from the latest step that executed substeps, plus manual fractures. */
+PX_API size_t px_world_break_events(const px_world *world, px_break_event *out,
+                                    size_t capacity);
 /* Contacts describe the final substep. On insufficient capacity, return total
  * count. */
 PX_API size_t px_world_contacts(const px_world *world, px_contact *out,
