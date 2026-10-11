@@ -19,7 +19,8 @@
 | `.github/workflows/` | platform builds and binding CI |
 | `CMakeLists.txt` | portable build, testing and installation |
 | `AGENTS.md` | contributor rules and ABI/validation requirements |
-| `README.md`, `CHANGELOG.md`, `LICENSE` | overview, version history, proprietary evaluation terms |
+| `README.md` | overview plus the final command guide: six language references, settings, complete examples, loader setup, query results and common mistakes |
+| `CHANGELOG.md`, `LICENSE` | version history and proprietary evaluation terms |
 
 Generated build directories, binaries, caches and development-tool downloads
 are excluded from source control. Release packages may include platform-specific
