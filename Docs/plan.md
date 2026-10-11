@@ -19,6 +19,13 @@
 - [x] Consistent license notices and Python/Rust/.NET packaging metadata.
 - [x] English licensing and publication guidance.
 
+## Delivered: command documentation — 2026-10-11
+
+- [x] Appended an English command guide to README for C, C++, C#, Rust, Python and Java.
+- [x] Explained every public operation, defaults, parameters, outputs, ownership and errors.
+- [x] Added complete per-language command examples and platform-specific setup instructions.
+- [x] Documented current wrapper gaps without claiming unimplemented query/settings parity.
+
 ## Next: rotation and robust rigid bodies
 
 - [ ] Quaternion orientation, angular velocity, torque, inertia tensors.
