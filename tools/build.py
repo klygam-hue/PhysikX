@@ -1,10 +1,3 @@
-#!/usr/bin/env python3
-# Copyright (c) 2026 Mistrul.
-# SPDX-License-Identifier: LicenseRef-PhysikX-Proprietary-1.0
-# See the accompanying LICENSE for permitted use.
-
-"""Dependency-free Linux/macOS development build (CMake is preferred)."""
-
 from pathlib import Path
 import os
 import subprocess
