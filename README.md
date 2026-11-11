@@ -1,4 +1,4 @@
-# PhysikX
+# PhysikX Made for an easy Physik control 
 
 **A renderer-independent 2D/3D physics library by Mistrul.**
 
